@@ -285,7 +285,7 @@ ChromeExOAuth.initCallbackPage = function() {
  *     ready state changes.  See documentation for XMLHttpRequest's
  *     onreadystatechange handler for more information.
  */
-ChromeExOAuth.prototype.sendRequest = function(method, url, headers, body, callback) {
+ChromeExOAuth.sendRequest = function(method, url, headers, body, callback) {
   var xhr = new XMLHttpRequest();
   xhr.onreadystatechange = function(data) {
     callback(xhr, data);
