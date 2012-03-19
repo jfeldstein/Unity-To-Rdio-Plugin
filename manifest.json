@@ -1,0 +1,12 @@
+{
+  "name": "Send Favorites to Rdio",
+  "description": "Sends favorite songs to Rdio as they're reported by Unity.",
+  "version": "1.0",
+  "background_page": "background.html",
+  "permissions": [
+    "http://*/*",
+    "https://*/*",
+    "tabs",
+    "management"
+  ]
+}

@@ -1,0 +1,219 @@
+<html>
+  <head>
+    <title></title>
+    <script type="text/javascript" src="chrome_ex_oauthsimple.js"></script>
+    <script type="text/javascript" src="chrome_ex_oauth.js"></script>
+    <script type="text/javascript" src="jquery.js"></script>
+    <script type="text/javascript" src="https://s3.amazonaws.com/MijoroUnityFiles/unity.js"></script>
+    
+    <script type="text/javascript">
+    
+      /*
+        All this stuff is still gross. Need to hook into Unity, then
+        add some kind of organization. Not sure what that'll look like
+        until after I finish my first Unity integration...
+      */
+    
+      // Stores rdio oauth urls and our consumer keys
+      var oauth_auth = {
+        'request_url': 'http://api.rdio.com/oauth/request_token',
+        'authorize_url': 'https://www.rdio.com/oauth/authorize',
+        'access_url': 'http://api.rdio.com/oauth/access_token',
+        'consumer_key': 'f8m274yzw368eqp8ax37wuag',
+        'consumer_secret': '4gTsmNXQcb'
+      };
+      
+      // Stores user-authed token and secret
+      var client_auth;
+      
+      // Prepares the extension to do oauth
+      var oauth = ChromeExOAuth.initBackgroundPage(oauth_auth);
+      
+      /* 
+      Used to make signed requests to rdio
+      
+      rdioMethod: the method to request from Rdio's API
+      callback: pass resulting data to this function
+      */
+      var rdioRequest = function(rdioMethod, params, callback) {
+        var url = 'http://api.rdio.com/1/';
+
+        var reqParams = {
+          method: rdioMethod,
+        };
+        
+        for(var i in params)
+        {
+          reqParams[i] = params[i];
+        }
+        
+        var sign = OAuthSimple().sign({
+          action : 'POST',
+          path : url,
+          parameters : reqParams,
+          signatures: {
+            consumer_key : oauth_auth.consumer_key,
+            shared_secret : oauth_auth.consumer_secret,
+            oauth_secret : client_auth.secret,
+            oauth_token: client_auth.token
+          }
+        });
+        
+        for(var i in sign.parameters)
+        {
+          reqParams[i] = sign.parameters[i];
+        }
+
+        $.ajax({
+          type: 'POST',
+          url: url,
+          data: reqParams,
+          // complete: function(){
+          //   console.log("AJAX FINISHED", arguments);
+          // },
+          // error: function(XHR, status, err) {
+          //   console.log("AJAX FAILED", arguments);
+          // },
+          success: callback,
+          dataType: 'json',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          }
+        })
+      }
+      
+      // Receives a track from Unity, processes the sending of it into Rdio
+      var addToRdio = function(track) {
+        console.log("LOOKING UP TRACK", track);
+        getRdioSongKey(track, function(bestGuessKey) {
+          console.log("FOUND SONG", bestGuessKey);
+          addSongToPlaylist(bestGuessKey);
+        });
+      };
+      
+      var cleanTrackAttr = function(attr) {
+        var clean =  attr.replace(/\(.*\)/, '');
+            clean = clean.replace(/ft\..*$/, '');
+            clean = clean.replace(/feat\..*$/, '');
+            
+        return clean.trim();
+      }
+      
+      
+      // Rdio requires that you provide a 'first song' when creating a playlist, 
+      var addSongToPlaylist = function(songKey) {
+        getExistingPlaylistKey(function(playlistKey) {
+          console.log("GOT PLAYLIST KEY", playlistKey);
+          if(playlistKey) {
+            addSongToExistingPlaylist(songKey, playlistKey);
+          }else {
+            addSongToNewPlaylist(songKey);
+          }
+        })
+      };
+
+      var addSongToExistingPlaylist = function(songKey, playlistKey) {
+        rdioRequest('addToPlaylist', {
+          playlist: playlistKey,
+          tracks: songKey
+        }, function(){
+          console.log("ADDED SONG TO PLAYLIST", arguments);
+        });
+      };
+      
+      var addSongToNewPlaylist = function(songKey) {
+        rdioRequest('createPlaylist', {
+          name: DESIRED_PLAYLIST_NAME,
+          description: "Songs I've thumbs up'd or favorited somewhere online, saved to my Rdio account by Unity.",
+          tracks: songKey
+        }, function(resp){
+          console.log("ADDED SONG TO NEW PLAYLIST", resp)
+        });
+      };
+      
+      
+      // Will return return the cachedPlaylistKey, or the key of the desired, already-existing playlist. 
+      //  If not set, it will lookup the desired playlist in the user's Rdio account. 
+      //  If not found, it will return null so that addToPlaylist knows to create it. 
+      var DESIRED_PLAYLIST_NAME = 'New Favorite Songs';
+      var cachedPlaylistKey;
+      var getExistingPlaylistKey = function(cb) {
+        if(cachedPlaylistKey) {
+          console.log("USING CACHED KEY", cachedPlaylistKey);
+          return cb(cachedPlaylistKey);
+        }
+        
+        rdioRequest('getPlaylists', {}, function(resp){
+          console.log("LOOKED UP PLAYLISTS", resp);
+          var result = resp.result;
+          var pl;
+          for(var i in result.owned) {
+            pl = result.owned[i];
+            if(pl.name == DESIRED_PLAYLIST_NAME) {
+              console.log("FOUND MATCHING PLAYLIST", pl);
+              cachedPlaylistKey = pl.key;
+              return cb(cachedPlaylistKey);
+            }
+          }
+
+          return cb(false);
+        })
+      };
+      
+      var deleteAllPlaylists = function() {
+        rdioRequest('getPlaylists', {}, function(resp) {
+          for(var i in resp.result.owned) {
+            rdioRequest('deletePlaylist', {
+              playlist: resp.result.owned[i].key
+            });
+          }
+        })
+      };
+      
+      var getRdioSongKey = function(track, cb) {
+        var artist = cleanTrackAttr(track.artist);
+        var title = cleanTrackAttr(track.title);
+        
+        rdioRequest('search', {
+          query: artist+' '+title,
+          types: 'Track',
+          count: 1
+        }, function(resp) {
+          console.log("GOT RESPONSE FROM TRACK LOOKUP", resp)
+          var result = resp.result;
+          if(result.results && result.results.length) {
+            return cb(result.results[0].key);
+          }
+        });
+      }
+      
+      oauth.authorize(function(token, secret) {
+        client_auth = {
+          token: token,
+          secret: secret
+        };
+        
+        var lastTrack = {
+          artist: '',
+          title: '',
+          playing: false
+        };
+        
+        var unity = Unity({
+          onAvailable: function(){},
+          onStateChange: function(track){
+            if(track.thumbsUp || track.favorite) {
+              if(lastTrack.artist!=track.artist || lastTrack.title!=track.title) {
+                addToRdio(track);
+//                deleteAllPlaylists();
+              }
+              lastTrack = track;
+            }
+          }
+        });
+      });
+    </script>
+    
+  </head>
+  <body></body>
+</html>
